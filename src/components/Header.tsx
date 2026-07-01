@@ -3,14 +3,20 @@
 import Link from 'next/link';
 import { useAuth } from '../hooks/useAuth';
 import { useRouter } from 'next/navigation';
+import { signOut } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 export default function Header() {
-  const { user, loading, supabase } = useAuth();
+  const { user, loading } = useAuth();
   const router = useRouter();
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push('/');
+    try {
+      await signOut(auth);
+      router.push('/');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
   return (
@@ -22,16 +28,16 @@ export default function Header() {
       <nav>
         {!loading && (
           <ul className="flex space-x-6 items-center">
+            <li>
+              <Link href="/timeline" className="hover:text-gray-300">
+                みんなのアイデア
+              </Link>
+            </li>
             {user ? (
               <>
                 <li>
                   <Link href="/mypage" className="hover:text-gray-300">
                     マイページ
-                  </Link>
-                </li>
-                <li>
-                  <Link href="/favorites" className="hover:text-gray-300">
-                    お気に入り
                   </Link>
                 </li>
                 <li>

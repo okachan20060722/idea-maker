@@ -6,9 +6,11 @@ interface ResultCardProps {
   result: IdeaResult | null;
   onSave?: () => void;
   onFavorite?: () => void;
+  onTogglePublic?: () => void;
   isSaving?: boolean;
   isSaved?: boolean;
   isFavorited?: boolean;
+  isPublic?: boolean;
   isAuthenticated: boolean;
 }
 
@@ -16,9 +18,11 @@ export default function ResultCard({
   result, 
   onSave, 
   onFavorite, 
+  onTogglePublic,
   isSaving, 
   isSaved, 
   isFavorited,
+  isPublic,
   isAuthenticated 
 }: ResultCardProps) {
   if (!result) return null;
@@ -33,6 +37,13 @@ export default function ResultCard({
         
         {isAuthenticated && (
           <div className="flex space-x-3">
+            <button
+              onClick={onTogglePublic}
+              disabled={!isSaved || isSaving}
+              className={`flex items-center px-3 py-2 rounded-md font-medium transition ${isPublic ? 'bg-indigo-100 text-indigo-700' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200'} disabled:opacity-50`}
+            >
+              {isPublic ? 'SNS公開中' : 'SNSに投稿'}
+            </button>
             <button
               onClick={onFavorite}
               disabled={!isSaved}
@@ -79,6 +90,37 @@ export default function ResultCard({
           <h3 className="text-sm font-semibold text-gray-500 mb-1">収益化案</h3>
           <p className="text-gray-800 bg-blue-50 p-4 rounded-md border border-blue-100">{result.monetization}</p>
         </div>
+
+        {result.feasibilityScore !== undefined && result.feasibilityActionPlan && (
+          <div className="mt-8 pt-6 border-t border-gray-100">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
+              <span className="mr-2" role="img" aria-label="rocket">🚀</span>
+              実現に向けたネクストアクション
+            </h3>
+            
+            <div className="bg-gradient-to-r from-indigo-50 to-blue-50 p-5 rounded-lg border border-indigo-100">
+              <div className="flex items-center mb-4">
+                <div className="flex-shrink-0 bg-white p-3 rounded-full shadow-sm border border-indigo-100 mr-4">
+                  <div className="text-center">
+                    <span className="block text-xs font-semibold text-indigo-500 uppercase tracking-wider">実現性スコア</span>
+                    <span className="block text-2xl font-extrabold text-indigo-700">{result.feasibilityScore}<span className="text-lg text-indigo-500">%</span></span>
+                  </div>
+                </div>
+                <div className="w-full bg-white rounded-full h-3 border border-indigo-100 overflow-hidden">
+                  <div 
+                    className={`h-full ${result.feasibilityScore >= 80 ? 'bg-green-500' : result.feasibilityScore >= 50 ? 'bg-indigo-500' : 'bg-yellow-500'} transition-all duration-1000 ease-out`}
+                    style={{ width: `${result.feasibilityScore}%` }}
+                  ></div>
+                </div>
+              </div>
+              
+              <div>
+                <h4 className="text-sm font-semibold text-indigo-800 mb-2">実現性を高める具体案</h4>
+                <p className="text-gray-800 leading-relaxed bg-white p-4 rounded-md shadow-sm border border-indigo-50">{result.feasibilityActionPlan}</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

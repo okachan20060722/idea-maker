@@ -1,8 +1,12 @@
 export interface IdeaCondition {
   purpose: string;
   field: string;
-  keyword: string;
+  keywords: string[];
   target: string;
+  grade?: string;
+  purposeDetail?: string;
+  fieldDetail?: string;
+  advancedConditions?: string;
 }
 
 export interface IdeaResult {
@@ -11,6 +15,9 @@ export interface IdeaResult {
   targetUser: string;
   differentiation: string;
   monetization: string;
+  keywords: string[];
+  feasibilityScore?: number;
+  feasibilityActionPlan?: string;
 }
 
 export interface GenerateIdeaResponse {
@@ -19,4 +26,7 @@ export interface GenerateIdeaResponse {
   target: string;
   differentiation: string;
   monetization: string;
+  keywords: string[];
+  feasibilityScore?: number;
+  feasibilityActionPlan?: string;
 }

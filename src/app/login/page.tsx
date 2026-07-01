@@ -1,7 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '../../lib/supabase/client';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signInWithPopup, 
+  GoogleAuthProvider 
+} from 'firebase/auth';
+import { auth } from '../../lib/firebase';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
@@ -10,24 +16,20 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const router = useRouter();
-  const supabase = createClient();
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setErrorMsg(error.message);
-    } else {
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
       router.push('/');
+    } catch (error: any) {
+      setErrorMsg(error.message || 'ログインに失敗しました');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleEmailSignup = async (e: React.FormEvent) => {
@@ -35,26 +37,29 @@ export default function LoginPage() {
     setLoading(true);
     setErrorMsg('');
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-
-    if (error) {
-      setErrorMsg(error.message);
-    } else {
-      alert('確認メールを送信しました。メール内のリンクをクリックしてください。');
+    try {
+      await createUserWithEmailAndPassword(auth, email, password);
+      alert('登録が完了しました。');
+      router.push('/');
+    } catch (error: any) {
+      setErrorMsg(error.message || '登録に失敗しました');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleGoogleLogin = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      router.push('/');
+    } catch (error: any) {
+      setErrorMsg(error.message || 'Googleログインに失敗しました');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -62,7 +67,7 @@ export default function LoginPage() {
       <h1 className="text-2xl font-bold mb-6 text-center">ログイン</h1>
       
       {errorMsg && (
-        <div className="mb-4 p-3 bg-red-100 text-red-700 rounded">
+        <div className="mb-4 p-3 bg-red-100 text-red-700 rounded text-sm">
           {errorMsg}
         </div>
       )}
@@ -93,14 +98,14 @@ export default function LoginPage() {
           <button
             onClick={handleEmailLogin}
             disabled={loading}
-            className="flex-1 bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition"
+            className="flex-1 bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition disabled:opacity-50"
           >
             ログイン
           </button>
           <button
             onClick={handleEmailSignup}
             disabled={loading}
-            className="flex-1 bg-gray-600 text-white py-2 rounded-md hover:bg-gray-700 transition"
+            className="flex-1 bg-gray-600 text-white py-2 rounded-md hover:bg-gray-700 transition disabled:opacity-50"
           >
             新規登録
           </button>
@@ -119,7 +124,8 @@ export default function LoginPage() {
 
         <button
           onClick={handleGoogleLogin}
-          className="mt-6 w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50"
+          disabled={loading}
+          className="mt-6 w-full flex justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
         >
           Googleでログイン
         </button>

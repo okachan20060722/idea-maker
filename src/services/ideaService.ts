@@ -1,4 +1,22 @@
-import { createClient } from '../lib/supabase/client';
+import { db } from '../lib/firebase';
+import { IdeaCondition } from '../types';
+import { 
+  collection, 
+  doc, 
+  addDoc, 
+  getDocs, 
+  deleteDoc, 
+  query, 
+  orderBy, 
+  serverTimestamp, 
+  updateDoc,
+  getDoc,
+  where,
+  collectionGroup,
+  arrayUnion,
+  arrayRemove,
+  increment
+} from 'firebase/firestore';
 
 export type Idea = {
   id: string;
@@ -8,101 +26,228 @@ export type Idea = {
   target: string;
   differentiation: string;
   monetization: string;
-  created_at: string;
+  keywords: string[];
+  isFavorite?: boolean; // legacy
+  favoritedBy?: string[];
+  likedBy?: string[];
+  likesCount?: number;
+  isPublic?: boolean;
+  createdAt: any;
+  conditionData?: IdeaCondition;
+  feasibilityScore?: number;
+  feasibilityActionPlan?: string;
+  tags?: string[];
+  commentsEnabled?: boolean;
 };
 
-export type Favorite = {
+export interface IdeaComment {
   id: string;
-  user_id: string;
-  idea_id: string;
-  created_at: string;
-};
+  userId: string;
+  userName: string;
+  text: string;
+  createdAt: any;
+}
 
 export const ideaService = {
-  saveIdea: async (idea: Omit<Idea, 'id' | 'created_at'>) => {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from('ideas')
-      .insert([idea])
-      .select()
-      .single();
-    if (error) throw error;
-    return data;
+  saveIdea: async (idea: Omit<Idea, 'id' | 'createdAt' | 'isFavorite'>) => {
+    const ideasRef = collection(db, 'users', idea.user_id, 'ideas');
+    const docRef = await addDoc(ideasRef, {
+      ...idea,
+      favoritedBy: [],
+      likedBy: [],
+      likesCount: 0,
+      createdAt: serverTimestamp(),
+    });
+    return { ...idea, id: docRef.id, favoritedBy: [], likedBy: [], likesCount: 0, createdAt: new Date() };
   },
 
   getIdeas: async (userId: string) => {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from('ideas')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data as Idea[];
+    const ideasRef = collection(db, 'users', userId, 'ideas');
+    const q = query(ideasRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+    })) as Idea[];
   },
 
   deleteIdea: async (id: string, userId: string) => {
-    const supabase = createClient();
-    const { error } = await supabase
-      .from('ideas')
-      .delete()
-      .eq('id', id)
-      .eq('user_id', userId);
-    if (error) throw error;
+    const ideaRef = doc(db, 'users', userId, 'ideas', id);
+    await deleteDoc(ideaRef);
   },
 
-  toggleFavorite: async (ideaId: string, userId: string) => {
-    const supabase = createClient();
+  toggleFavorite: async (ideaId: string, ownerId: string, currentUserId: string) => {
+    const ideaRef = doc(db, 'users', ownerId, 'ideas', ideaId);
+    const ideaSnap = await getDoc(ideaRef);
+    if (!ideaSnap.exists()) {
+      throw new Error("Idea not found");
+    }
+    const favoritedBy = ideaSnap.data().favoritedBy || [];
+    const isFavorited = favoritedBy.includes(currentUserId);
     
-    // Check if already favorited
-    const { data: existing } = await supabase
-      .from('favorites')
-      .select('*')
-      .eq('idea_id', ideaId)
-      .eq('user_id', userId)
-      .single();
-
-    if (existing) {
-      // Remove favorite
-      const { error } = await supabase
-        .from('favorites')
-        .delete()
-        .eq('id', existing.id);
-      if (error) throw error;
-      return false; // isFavorite = false
+    if (isFavorited) {
+      await updateDoc(ideaRef, {
+        favoritedBy: arrayRemove(currentUserId)
+      });
+      return false;
     } else {
-      // Add favorite
-      const { error } = await supabase
-        .from('favorites')
-        .insert([{ idea_id: ideaId, user_id: userId }]);
-      if (error) throw error;
-      return true; // isFavorite = true
+      await updateDoc(ideaRef, {
+        favoritedBy: arrayUnion(currentUserId)
+      });
+      return true;
+    }
+  },
+
+  toggleLike: async (ideaId: string, ownerId: string, currentUserId: string) => {
+    const ideaRef = doc(db, 'users', ownerId, 'ideas', ideaId);
+    const ideaSnap = await getDoc(ideaRef);
+    if (!ideaSnap.exists()) {
+      throw new Error("Idea not found");
+    }
+    const likedBy = ideaSnap.data().likedBy || [];
+    const isLiked = likedBy.includes(currentUserId);
+    
+    if (isLiked) {
+      await updateDoc(ideaRef, {
+        likedBy: arrayRemove(currentUserId),
+        likesCount: increment(-1)
+      });
+      return false;
+    } else {
+      await updateDoc(ideaRef, {
+        likedBy: arrayUnion(currentUserId),
+        likesCount: increment(1)
+      });
+      return true;
     }
   },
 
   getFavorites: async (userId: string) => {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from('favorites')
-      .select(`
-        id,
-        created_at,
-        ideas (*)
-      `)
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data.map((f: any) => f.ideas) as Idea[];
+    const ideasRef = collectionGroup(db, 'ideas');
+    const q = query(ideasRef, where('favoritedBy', 'array-contains', userId), orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const results = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+    })) as Idea[];
+    // Memory sort to avoid index requirements
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
   
-  checkIsFavorite: async (ideaId: string, userId: string) => {
-    const supabase = createClient();
-    const { data } = await supabase
-      .from('favorites')
-      .select('id')
-      .eq('idea_id', ideaId)
-      .eq('user_id', userId)
-      .single();
-    return !!data;
+  getLikedIdeas: async (userId: string) => {
+    const ideasRef = collectionGroup(db, 'ideas');
+    const q = query(ideasRef, where('likedBy', 'array-contains', userId), orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const results = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+    })) as Idea[];
+    // Memory sort
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+  
+  checkIsFavorite: async (ideaId: string, ownerId: string, currentUserId: string) => {
+    const ideaRef = doc(db, 'users', ownerId, 'ideas', ideaId);
+    const ideaSnap = await getDoc(ideaRef);
+    if (!ideaSnap.exists()) return false;
+    const favoritedBy = ideaSnap.data().favoritedBy || [];
+    return favoritedBy.includes(currentUserId);
+  },
+
+  getPublicIdeas: async () => {
+    const ideasRef = collectionGroup(db, 'ideas');
+    const q = query(ideasRef, where('isPublic', '==', true));
+    const snapshot = await getDocs(q);
+    const results = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+    })) as Idea[];
+    // Memory sort to avoid requiring a composite index for isPublic + createdAt
+    return results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+
+  publishIdea: async (ideaId: string, userId: string, tags: string[], commentsEnabled: boolean) => {
+    const ideaRef = doc(db, 'users', userId, 'ideas', ideaId);
+    await updateDoc(ideaRef, {
+      isPublic: true,
+      tags,
+      commentsEnabled
+    });
+    return true;
+  },
+
+  unpublishIdea: async (ideaId: string, userId: string) => {
+    const ideaRef = doc(db, 'users', userId, 'ideas', ideaId);
+    await updateDoc(ideaRef, {
+      isPublic: false
+    });
+    return false;
+  },
+
+  getComments: async (ideaId: string, ownerId: string) => {
+    const commentsRef = collection(db, 'users', ownerId, 'ideas', ideaId, 'comments');
+    const q = query(commentsRef, orderBy('createdAt', 'asc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+    })) as IdeaComment[];
+  },
+
+  addComment: async (ideaId: string, ownerId: string, userId: string, userName: string, text: string) => {
+    const commentsRef = collection(db, 'users', ownerId, 'ideas', ideaId, 'comments');
+    const docRef = await addDoc(commentsRef, {
+      userId,
+      userName,
+      text,
+      createdAt: serverTimestamp()
+    });
+    return {
+      id: docRef.id,
+      userId,
+      userName,
+      text,
+      createdAt: new Date().toISOString()
+    };
+  },
+
+  // Local storage methods for non-logged in users
+  saveLocalIdea: (idea: Omit<Idea, 'id' | 'createdAt' | 'isFavorite'>) => {
+    if (typeof window === 'undefined') return null;
+    const localIdeas = ideaService.getLocalIdeas();
+    const newIdea: Idea = {
+      ...idea,
+      id: `local_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      favoritedBy: [],
+      likedBy: [],
+      likesCount: 0,
+      createdAt: new Date().toISOString()
+    };
+    localIdeas.unshift(newIdea); // Add to beginning
+    sessionStorage.setItem('guest_ideas', JSON.stringify(localIdeas));
+    return newIdea;
+  },
+
+  getLocalIdeas: (): Idea[] => {
+    if (typeof window === 'undefined') return [];
+    const stored = sessionStorage.getItem('guest_ideas');
+    if (!stored) return [];
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      return [];
+    }
+  },
+
+  deleteLocalIdea: (id: string) => {
+    if (typeof window === 'undefined') return;
+    const localIdeas = ideaService.getLocalIdeas();
+    const filtered = localIdeas.filter(idea => idea.id !== id);
+    sessionStorage.setItem('guest_ideas', JSON.stringify(filtered));
   }
 };
