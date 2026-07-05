@@ -4,30 +4,107 @@ import React, { useState, useEffect } from 'react';
 import InputForm from '@/components/InputForm';
 import ResultCard from '@/components/ResultCard';
 import PublishModal from '@/components/PublishModal';
+import ConfirmModal from '@/components/ConfirmModal';
+import BackToTopButton from '@/components/BackToTopButton';
 import { IdeaCondition, IdeaResult } from '@/types';
-import { Idea } from '@/services/ideaService';
+import { ideaService, Idea } from '@/services/ideaService';
 import { useAuth } from '@/hooks/useAuth';
-import { ideaService } from '@/services/ideaService';
+import { useRouter } from 'next/navigation';
+import { getFirebaseErrorMessage } from '@/lib/firebaseError';
 
 export default function CreateIdea() {
+  const router = useRouter();
   const [result, setResult] = useState<IdeaResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
+  const resultRef = React.useRef<HTMLDivElement>(null);
   
   const [savedIdeaId, setSavedIdeaId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isFavorited, setIsFavorited] = useState(false);
   const [isPublic, setIsPublic] = useState(false);
+  const [isFavorited, setIsFavorited] = useState(false);
   
   const [publishModalIdea, setPublishModalIdea] = useState<Idea | null>(null);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
 
-  // Reset saved states when result changes
+  // Confirm Modal State
+  const [confirmConfig, setConfirmConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    isDestructive?: boolean;
+    confirmText?: string;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void, isDestructive = false, confirmText = 'OK') => {
+    setConfirmConfig({
+      isOpen: true,
+      title,
+      message,
+      onConfirm,
+      isDestructive,
+      confirmText
+    });
+  };
+  const [sessionId, setSessionId] = useState('');
+
+  useEffect(() => {
+    setSessionId(Math.random().toString(36).substring(2, 15) + Date.now().toString(36));
+  }, []);
+
   useEffect(() => {
     setSavedIdeaId(null);
-    setIsFavorited(false);
     setIsPublic(false);
+    setIsFavorited(false);
   }, [result]);
+
+  const autoSaveIdea = async (ideaResult: IdeaResult) => {
+    setIsSaving(true);
+    try {
+      if (user) {
+        const saved = await ideaService.saveIdea({
+          user_id: user.uid,
+          title: ideaResult.name,
+          summary: ideaResult.summary,
+          target: ideaResult.targetUser,
+          differentiation: ideaResult.differentiation,
+          monetization: ideaResult.monetization,
+          keywords: ideaResult.keywords,
+          feasibilityScore: ideaResult.feasibilityScore,
+          feasibilityActionPlan: ideaResult.feasibilityActionPlan,
+          isPublic: false,
+        });
+        setSavedIdeaId(saved.id);
+      } else {
+        const saved = ideaService.saveLocalIdea({
+          user_id: 'guest',
+          title: ideaResult.name,
+          summary: ideaResult.summary,
+          target: ideaResult.targetUser,
+          differentiation: ideaResult.differentiation,
+          monetization: ideaResult.monetization,
+          keywords: ideaResult.keywords,
+          feasibilityScore: ideaResult.feasibilityScore,
+          feasibilityActionPlan: ideaResult.feasibilityActionPlan,
+          isPublic: false,
+        });
+        if (saved) {
+          setSavedIdeaId(saved.id);
+        }
+      }
+    } catch (error: any) {
+      console.error(error);
+      // Auto save error can be silent or alert
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleGenerate = async (condition: IdeaCondition) => {
     setIsLoading(true);
@@ -44,7 +121,7 @@ export default function CreateIdea() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(condition),
+        body: JSON.stringify({ ...condition, sessionId }),
       });
 
       if (!res.ok) {
@@ -66,80 +143,120 @@ export default function CreateIdea() {
       };
 
       setResult(mappedResult);
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
 
-      // Auto save
-      if (user) {
-        setIsSaving(true);
-        try {
-          const saved = await ideaService.saveIdea({
-            user_id: user.uid,
-            title: mappedResult.name,
-            summary: mappedResult.summary,
-            target: mappedResult.targetUser,
-            differentiation: mappedResult.differentiation,
-            monetization: mappedResult.monetization,
-            keywords: mappedResult.keywords,
-            feasibilityScore: mappedResult.feasibilityScore,
-            feasibilityActionPlan: mappedResult.feasibilityActionPlan,
-            conditionData: condition,
-            isPublic: false,
-          });
-          setSavedIdeaId(saved.id);
-        } catch (error: any) {
-          console.error("Auto save to Firebase failed", error);
-        } finally {
-          setIsSaving(false);
-        }
-      } else {
-        const saved = ideaService.saveLocalIdea({
-          user_id: 'guest',
-          title: mappedResult.name,
-          summary: mappedResult.summary,
-          target: mappedResult.targetUser,
-          differentiation: mappedResult.differentiation,
-          monetization: mappedResult.monetization,
-          keywords: mappedResult.keywords,
-          feasibilityScore: mappedResult.feasibilityScore,
-          feasibilityActionPlan: mappedResult.feasibilityActionPlan,
-          conditionData: condition,
-          isPublic: false,
-        });
-        if (saved) {
-          setSavedIdeaId(saved.id);
-        }
-      }
+      // Automatically save the generated idea
+      autoSaveIdea(mappedResult);
+
     } catch (error: any) {
       console.error(error);
-      alert(error.message || '通信に失敗しました。');
+      alert(getFirebaseErrorMessage(error));
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleFavorite = async () => {
-    if (!user || !savedIdeaId) return;
+  const handleToggleFavorite = async () => {
+    if (loading) return;
+    
+    if (!user) {
+      const expectedNewStatus = !isFavorited;
+      
+      let targetId = savedIdeaId;
+      if (!targetId && result) {
+        // Automatically save it locally if not saved yet
+        const mappedResult = {
+          user_id: 'guest',
+          title: result.name,
+          summary: result.summary,
+          target: result.targetUser,
+          differentiation: result.differentiation,
+          monetization: result.monetization,
+          keywords: result.keywords || [],
+          isPublic: false,
+          feasibilityScore: result.feasibilityScore,
+          feasibilityActionPlan: result.feasibilityActionPlan
+        };
+        const saved = ideaService.saveLocalIdea(mappedResult);
+        if (saved) {
+          targetId = saved.id;
+          setSavedIdeaId(saved.id);
+        }
+      }
+
+      if (targetId && result) {
+        const ideaToToggle: Idea = {
+          id: targetId,
+          user_id: 'guest',
+          title: result.name,
+          summary: result.summary,
+          target: result.targetUser,
+          differentiation: result.differentiation,
+          monetization: result.monetization,
+          keywords: result.keywords || [],
+          feasibilityScore: result.feasibilityScore,
+          feasibilityActionPlan: result.feasibilityActionPlan,
+          isPublic: false,
+          favoritedBy: expectedNewStatus ? ['guest'] : [],
+          likedBy: [],
+          likesCount: 0,
+          createdAt: new Date().toISOString()
+        };
+        ideaService.toggleLocalFavorite(ideaToToggle);
+        setIsFavorited(expectedNewStatus);
+      }
+      return;
+    }
+    
+    if (!savedIdeaId) return;
+
+    const expectedNewStatus = !isFavorited;
+    setIsFavorited(expectedNewStatus);
+
     try {
-      const favoriteState = await ideaService.toggleFavorite(savedIdeaId, user.uid, user.uid);
-      setIsFavorited(favoriteState);
+      if (savedIdeaId.startsWith('local_')) {
+        // Idea was saved locally before login migration
+        console.warn("Cannot favorite local idea on server before migration");
+        return;
+      }
+      await ideaService.toggleFavorite(savedIdeaId, user.uid, user.uid);
     } catch (error: any) {
-      console.error(error);
-      alert('お気に入りの更新に失敗しました: ' + error.message);
+      console.error('Toggle favorite failed:', error);
+      setIsFavorited(!expectedNewStatus); // Revert on failure
     }
   };
 
   const handleTogglePublicClick = async () => {
-    if (!user || !savedIdeaId || !result) return;
+    if (!user) {
+      showConfirm(
+        'ログインが必要です',
+        'SNSへの投稿にはログインが必要です。ログイン画面へ移動しますか？',
+        () => router.push('/login'),
+        false,
+        'ログインする'
+      );
+      return;
+    }
+    if (!savedIdeaId || !result) return;
     
     if (isPublic) {
-      if (confirm('非公開にしますか？')) {
-        try {
-          await ideaService.unpublishIdea(savedIdeaId, user.uid);
-          setIsPublic(false);
-        } catch (error: any) {
-          console.error(error);
-          alert('非公開の更新に失敗しました: ' + error.message);
-        }
-      }
+      showConfirm(
+        '非公開にする',
+        '本当にこのアイデアを非公開にしますか？',
+        async () => {
+          try {
+            await ideaService.unpublishIdea(savedIdeaId, user.uid);
+            setIsPublic(false);
+          } catch (error: any) {
+            console.error(error);
+            alert('非公開の更新に失敗しました: ' + getFirebaseErrorMessage(error));
+          }
+        },
+        true,
+        '非公開にする'
+      );
     } else {
       // Create a dummy idea object for the modal
       const dummyIdea: Idea = {
@@ -159,15 +276,44 @@ export default function CreateIdea() {
   };
 
   const handlePublishConfirm = async (ideaId: string, tags: string[], commentsEnabled: boolean) => {
-    if (!user) return;
+    if (!user || !publishModalIdea) return;
     try {
-      await ideaService.publishIdea(ideaId, user.uid, tags, commentsEnabled);
+      let finalIdeaId = ideaId;
+
+      // Migrate local idea to Firestore if needed
+      if (ideaId.startsWith('local_')) {
+        const ideaToSave = { ...publishModalIdea, user_id: user.uid, isPublic: true, tags, commentsEnabled };
+        delete (ideaToSave as any).id;
+        delete (ideaToSave as any).isFavorite;
+        
+        const saved = await ideaService.saveIdea(ideaToSave);
+        finalIdeaId = saved.id;
+        setSavedIdeaId(finalIdeaId);
+      } else {
+        await ideaService.publishIdea(finalIdeaId, user.uid, tags, commentsEnabled);
+      }
+
+      const updatedIdea = { ...publishModalIdea, id: finalIdeaId, isPublic: true, tags, commentsEnabled, user_id: user.uid };
+      setPublishModalIdea(updatedIdea);
       setIsPublic(true);
       setIsPublishModalOpen(false);
-      alert('SNSタイムラインに投稿しました！');
+      
+      showConfirm(
+        '公開完了',
+        'アイデアをタイムラインに公開しました！',
+        () => router.push('/timeline'),
+        false,
+        'タイムラインを見る'
+      );
     } catch (error: any) {
       console.error(error);
-      alert('公開設定の更新に失敗しました: ' + error.message);
+      showConfirm(
+        'エラー',
+        '公開に失敗しました: ' + getFirebaseErrorMessage(error),
+        () => {},
+        false,
+        '閉じる'
+      );
     }
   };
 
@@ -180,16 +326,19 @@ export default function CreateIdea() {
       
       <InputForm onSubmit={handleGenerate} isLoading={isLoading} />
       
-      <ResultCard 
-        result={result} 
-        onFavorite={handleFavorite}
-        onTogglePublic={handleTogglePublicClick}
-        isSaving={isSaving}
-        isSaved={!!savedIdeaId}
-        isFavorited={isFavorited}
-        isPublic={isPublic}
-        isAuthenticated={!!user}
-      />
+      <div ref={resultRef}>
+        <ResultCard 
+          result={result} 
+          onTogglePublic={handleTogglePublicClick}
+          onToggleFavorite={handleToggleFavorite}
+          isSaving={isSaving}
+          isSaved={!!savedIdeaId}
+          isPublic={isPublic}
+          isFavorited={isFavorited}
+          autoSaved={true}
+          isAuthenticated={true} // Set true to show buttons even for guests (we alert them if clicked)
+        />
+      </div>
 
       <PublishModal
         idea={publishModalIdea}
@@ -197,6 +346,18 @@ export default function CreateIdea() {
         onClose={() => setIsPublishModalOpen(false)}
         onPublish={handlePublishConfirm}
       />
+
+      <ConfirmModal
+        isOpen={confirmConfig.isOpen}
+        title={confirmConfig.title}
+        message={confirmConfig.message}
+        onConfirm={confirmConfig.onConfirm}
+        onCancel={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
+        isDestructive={confirmConfig.isDestructive}
+        confirmText={confirmConfig.confirmText}
+      />
+
+      <BackToTopButton />
     </main>
   );
 }

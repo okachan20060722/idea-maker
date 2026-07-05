@@ -1,29 +1,33 @@
 import React from 'react';
 import { IdeaResult } from '../types';
-import { Heart, Save } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Heart } from 'lucide-react';
 
 interface ResultCardProps {
   result: IdeaResult | null;
   onSave?: () => void;
-  onFavorite?: () => void;
   onTogglePublic?: () => void;
   isSaving?: boolean;
   isSaved?: boolean;
-  isFavorited?: boolean;
   isPublic?: boolean;
-  isAuthenticated: boolean;
+  isAuthenticated?: boolean;
+  autoSaved?: boolean;
+  isFavorited?: boolean;
+  onToggleFavorite?: (e: React.MouseEvent) => void;
+  onToggleSave?: (e: React.MouseEvent) => void;
 }
 
 export default function ResultCard({ 
   result, 
   onSave, 
-  onFavorite, 
   onTogglePublic,
   isSaving, 
   isSaved, 
-  isFavorited,
   isPublic,
-  isAuthenticated 
+  isAuthenticated,
+  autoSaved,
+  isFavorited,
+  onToggleFavorite,
+  onToggleSave
 }: ResultCardProps) {
   if (!result) return null;
 
@@ -35,33 +39,40 @@ export default function ResultCard({
           生成されたアイデア
         </h2>
         
-        {isAuthenticated && (
-          <div className="flex space-x-3">
+        <div className="flex space-x-3">
+          {autoSaved && onToggleFavorite && (
+            <button
+              onClick={onToggleFavorite}
+              className={`flex items-center px-4 py-2 rounded-md font-medium transition ${isFavorited ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'}`}
+            >
+              <Heart size={18} fill={isFavorited ? "currentColor" : "none"} className={isFavorited ? "text-red-500 mr-2" : "mr-2"} />
+              {isFavorited ? 'お気に入り済み' : 'お気に入りに追加'}
+            </button>
+          )}
+          
+          {onTogglePublic && (
             <button
               onClick={onTogglePublic}
-              disabled={!isSaved || isSaving}
-              className={`flex items-center px-3 py-2 rounded-md font-medium transition ${isPublic ? 'bg-indigo-100 text-indigo-700' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200'} disabled:opacity-50`}
+              className={`flex items-center px-4 py-2 rounded-md font-medium transition ${isPublic ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'}`}
             >
               {isPublic ? 'SNS公開中' : 'SNSに投稿'}
             </button>
+          )}
+          
+          {!autoSaved && onSave && (
             <button
-              onClick={onFavorite}
-              disabled={!isSaved}
-              className={`p-2 rounded-full transition ${isFavorited ? 'text-red-500 bg-red-50 hover:bg-red-100' : 'text-gray-400 bg-gray-100 hover:bg-gray-200'} ${!isSaved && 'opacity-50 cursor-not-allowed'}`}
-              title={isSaved ? "お気に入り" : "保存してからお気に入りできます"}
+              onClick={(e) => {
+                if (onToggleSave) onToggleSave(e);
+                else onSave();
+              }}
+              disabled={isSaving}
+              className={`flex items-center px-4 py-2 rounded-md font-medium transition ${isSaved ? 'bg-blue-50 text-blue-600 border border-blue-200' : 'bg-blue-600 text-white hover:bg-blue-700'} disabled:opacity-50`}
             >
-              <Heart fill={isFavorited ? "currentColor" : "none"} size={24} />
+              <Bookmark size={18} fill={isSaved ? "currentColor" : "none"} className={isSaved ? "text-blue-500 mr-2" : "mr-2"} />
+              {isSaved ? '保存済み' : isSaving ? '保存中...' : 'マイページに保存'}
             </button>
-            <button
-              onClick={onSave}
-              disabled={isSaved || isSaving}
-              className={`flex items-center px-4 py-2 rounded-md font-medium transition ${isSaved ? 'bg-green-100 text-green-700' : 'bg-blue-600 text-white hover:bg-blue-700'} disabled:opacity-50`}
-            >
-              <Save size={18} className="mr-2" />
-              {isSaved ? '保存済み' : isSaving ? '保存中...' : '保存する'}
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       
       <div className="space-y-6">
@@ -74,7 +85,7 @@ export default function ResultCard({
           <h3 className="text-sm font-semibold text-gray-500 mb-1">概要</h3>
           <p className="text-gray-800 leading-relaxed">{result.summary}</p>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
             <h3 className="text-sm font-semibold text-gray-500 mb-1">想定ユーザー</h3>
@@ -92,13 +103,13 @@ export default function ResultCard({
         </div>
 
         {result.feasibilityScore !== undefined && result.feasibilityActionPlan && (
-          <div className="mt-8 pt-6 border-t border-gray-100">
+          <div className="mt-6 mb-6">
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center">
               <span className="mr-2" role="img" aria-label="rocket">🚀</span>
-              実現に向けたネクストアクション
+              実現性スコアと詳細解説
             </h3>
             
-            <div className="bg-gradient-to-r from-indigo-50 to-blue-50 p-5 rounded-lg border border-indigo-100">
+            <div className="bg-gradient-to-r from-indigo-50 to-blue-50 p-5 rounded-lg border border-indigo-100 shadow-sm">
               <div className="flex items-center mb-4">
                 <div className="flex-shrink-0 bg-white p-3 rounded-full shadow-sm border border-indigo-100 mr-4">
                   <div className="text-center">
@@ -115,12 +126,13 @@ export default function ResultCard({
               </div>
               
               <div>
-                <h4 className="text-sm font-semibold text-indigo-800 mb-2">実現性を高める具体案</h4>
+                <h4 className="text-sm font-semibold text-indigo-800 mb-2">スコアの理由と実現への具体案</h4>
                 <p className="text-gray-800 leading-relaxed bg-white p-4 rounded-md shadow-sm border border-indigo-50">{result.feasibilityActionPlan}</p>
               </div>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

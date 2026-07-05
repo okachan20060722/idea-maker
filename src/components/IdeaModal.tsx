@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Idea } from '../services/ideaService';
 import { Heart, ThumbsUp, X, Share2, Trash2, Hash, MessageSquare, Send } from 'lucide-react';
 import { ideaService, IdeaComment } from '../services/ideaService';
@@ -14,6 +14,7 @@ interface IdeaModalProps {
   onToggleLike?: (idea: Idea) => void;
   onTogglePublic?: (idea: Idea) => void;
   onDelete?: (ideaId: string) => void;
+  onScoreClick?: (idea: Idea) => void; // Added for bucket relay if parent wants to handle it
 }
 
 export default function IdeaModal({
@@ -25,11 +26,13 @@ export default function IdeaModal({
   onToggleFavorite,
   onToggleLike,
   onTogglePublic,
-  onDelete
+  onDelete,
+  onScoreClick
 }: IdeaModalProps) {
-  const [comments, setComments] = React.useState<IdeaComment[]>([]);
-  const [newComment, setNewComment] = React.useState('');
-  const [isSubmittingComment, setIsSubmittingComment] = React.useState(false);
+  const [comments, setComments] = useState<IdeaComment[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
 
   React.useEffect(() => {
     if (isOpen && idea && idea.commentsEnabled !== false) {
@@ -52,30 +55,57 @@ export default function IdeaModal({
     }
   };
 
+  const handleScoreClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onScoreClick) {
+      onScoreClick(idea!);
+    } else {
+      setIsScoreModalOpen(true);
+    }
+  };
+
+  const closeScoreModal = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsScoreModalOpen(false);
+  };
+
   if (!isOpen || !idea) return null;
 
-  const isOwner = currentUserId === idea.user_id || idea.user_id === 'guest';
-  const isFavorited = currentUserId ? (idea.favoritedBy || []).includes(currentUserId) : false;
-  const isLiked = currentUserId ? (idea.likedBy || []).includes(currentUserId) : false;
+  const isOwner = idea.user_id === currentUserId || idea.user_id === 'guest';
+  const isFavorited = idea.favoritedBy?.includes(currentUserId || 'guest') || false;
+  const isLiked = idea.likedBy?.includes(currentUserId || 'guest') || false;
   const likesCount = idea.likesCount || 0;
   const displayTags = idea.isPublic && idea.tags ? idea.tags : (idea.keywords || []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 transition-opacity">
-      <div 
-        className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl relative animate-fade-in"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex justify-between items-center p-6 border-b border-gray-100">
-          <h2 className="text-2xl font-bold text-gray-900 pr-8">{idea.title}</h2>
-          <button 
-            onClick={onClose}
-            className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 transition bg-gray-50 hover:bg-gray-100 rounded-full p-1"
-          >
-            <X size={24} />
-          </button>
-        </div>
+    <>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 transition-opacity">
+        <div 
+          className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl relative animate-fade-in"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex justify-between items-center p-6 border-b border-gray-100">
+            <div className="flex items-center flex-wrap gap-3 pr-8">
+              <h2 className="text-2xl font-bold text-gray-900">{idea.title}</h2>
+              {idea.feasibilityScore !== undefined && (
+                <button
+                  onClick={handleScoreClick}
+                  className="inline-flex items-center text-sm px-3 py-1 bg-gradient-to-r from-indigo-50 to-blue-50 text-indigo-700 rounded-full font-bold border border-indigo-100 shadow-sm hover:from-indigo-100 hover:to-blue-100 transition transform hover:scale-105 active:scale-95 cursor-pointer"
+                  title="実現性スコアの詳細を見る"
+                >
+                  <span className="mr-1" role="img" aria-label="rocket">⚡</span>
+                  実現性 {idea.feasibilityScore}%
+                </button>
+              )}
+            </div>
+            <button 
+              onClick={onClose}
+              className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 transition bg-gray-50 hover:bg-gray-100 rounded-full p-1"
+            >
+              <X size={24} />
+            </button>
+          </div>
 
         {/* Content */}
         <div className="p-6 overflow-y-auto flex-grow space-y-6">
@@ -173,7 +203,7 @@ export default function IdeaModal({
         <div className="p-6 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             {/* Favorite Button (Global) */}
-            {currentUserId && onToggleFavorite && (
+            {onToggleFavorite && (
               <button
                 onClick={(e) => { e.stopPropagation(); onToggleFavorite(idea); }}
                 className={`flex items-center px-4 py-2 rounded-lg font-medium transition ${isFavorited ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}
@@ -197,7 +227,7 @@ export default function IdeaModal({
 
           <div className="flex items-center gap-3 ml-auto">
             {/* SNS Post Button (Owner only) */}
-            {currentUserId && isOwner && onTogglePublic && (
+            {isOwner && onTogglePublic && (
               <button
                 onClick={(e) => { e.stopPropagation(); onTogglePublic(idea); }}
                 className={`flex items-center px-4 py-2 rounded-lg font-medium transition ${idea.isPublic ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
@@ -221,5 +251,53 @@ export default function IdeaModal({
         </div>
       </div>
     </div>
+
+      {/* Score Detail Modal */}
+      {isScoreModalOpen && (
+        <div 
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          onClick={closeScoreModal}
+        >
+          <div 
+            className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white relative">
+              <button 
+                onClick={closeScoreModal}
+                className="absolute top-4 right-4 text-white/80 hover:text-white transition"
+              >
+                <X size={24} />
+              </button>
+              <div className="flex items-center gap-4">
+                <div className="bg-white/20 p-3 rounded-full flex-shrink-0">
+                  <span className="text-3xl" role="img" aria-label="rocket">⚡</span>
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">実現性スコア</h3>
+                  <div className="text-3xl font-extrabold mt-1">{idea.feasibilityScore}%</div>
+                </div>
+              </div>
+            </div>
+            
+            <div className="p-6">
+              <h4 className="text-sm font-bold text-indigo-800 mb-3 border-b border-indigo-50 pb-2">スコアの理由と実現への具体案</h4>
+              <div className="text-gray-700 leading-relaxed max-h-[50vh] overflow-y-auto pr-2 whitespace-pre-wrap text-sm md:text-base">
+                {idea.feasibilityActionPlan || "詳細なアクションプランはまだありません。"}
+              </div>
+              
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={closeScoreModal}
+                  className="px-5 py-2 bg-indigo-50 text-indigo-700 font-medium rounded-full hover:bg-indigo-100 transition"
+                >
+                  閉じる
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

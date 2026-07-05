@@ -1,21 +1,15 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
+import { generateContentWithRotation } from '@/lib/geminiRotation';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { purpose, field, keywords, target, grade, purposeDetail, fieldDetail, advancedConditions } = body;
+    const { purpose, field, keywords, target, grade, purposeDetail, fieldDetail, advancedConditions, sessionId } = body;
 
     if (!keywords || !Array.isArray(keywords) || keywords.length === 0 || !target || !target.trim()) {
       return NextResponse.json({ error: 'キーワードとターゲット層は必須です。' }, { status: 400 });
     }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'Gemini APIキー (GEMINI_API_KEY) が設定されていません。' }, { status: 500 });
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
 
     const purposeStr = purpose === '学生' && grade && grade !== '指定なし' ? `学生（${grade}）` : purpose === 'その他' && purposeDetail ? `その他（${purposeDetail}）` : purpose;
     const fieldStr = field === 'その他' && fieldDetail ? `その他（${fieldDetail}）` : field;
@@ -62,7 +56,7 @@ ${advancedConditions ? `\n高度な条件・制約:\n${advancedConditions}\n` : 
       required: ["title", "summary", "target", "differentiation", "monetization", "feasibilityScore", "feasibilityActionPlan", "keywords"],
     };
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRotation({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: {

@@ -7,10 +7,13 @@ import { userService, UserProfile } from '../../services/userService';
 import { useRouter } from 'next/navigation';
 import { signOut } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
-import { Search, UserMinus, FileText, Heart, ThumbsUp } from 'lucide-react';
-import IdeaCard from '../../components/IdeaCard';
-import IdeaModal from '../../components/IdeaModal';
-import PublishModal from '../../components/PublishModal';
+import { Search, UserMinus, FileText, Heart, ThumbsUp, Camera, User } from 'lucide-react';
+import Image from 'next/image';
+import ConfirmModal from '@/components/ConfirmModal';
+import IdeaCard from '@/components/IdeaCard';
+import IdeaModal from '@/components/IdeaModal';
+import PublishModal from '@/components/PublishModal';
+import { getFirebaseErrorMessage } from '@/lib/firebaseError';
 
 type TabType = 'myideas' | 'favorites' | 'likes';
 
@@ -26,9 +29,11 @@ export default function MyPage() {
   const [activeTab, setActiveTab] = useState<TabType>('myideas');
   
   // Profile state
-  const [profile, setProfile] = useState<UserProfile>({ userName: '', age: '' });
+  const [profile, setProfile] = useState<UserProfile>({ userName: '', age: '', avatarUrl: '' });
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
 
   // Search state
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -40,15 +45,46 @@ export default function MyPage() {
   const [publishModalIdea, setPublishModalIdea] = useState<Idea | null>(null);
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
 
+  // Confirm Modal State
+  const [confirmConfig, setConfirmConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    isDestructive?: boolean;
+    confirmText?: string;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void, isDestructive = false, confirmText = 'OK') => {
+    setConfirmConfig({
+      isOpen: true,
+      title,
+      message,
+      onConfirm,
+      isDestructive,
+      confirmText
+    });
+  };
+
   useEffect(() => {
-    if (!loading && !user) {
-      router.push('/login');
+    if (!loading) {
+      if (user) {
+        loadData();
+      } else {
+        // Load guest data
+        const localIdeas = ideaService.getLocalIdeas();
+        const localFavorites = ideaService.getLocalFavorites();
+        setMyIdeas(localIdeas);
+        setFavoriteIdeas(localFavorites);
+        setFetching(false);
+      }
     }
-    
-    if (user) {
-      loadData();
-    }
-  }, [user, loading, router]);
+  }, [user, loading]);
 
   const loadData = async () => {
     if (!user) return;
@@ -68,8 +104,9 @@ export default function MyPage() {
       } else {
         setProfile({ userName: user.displayName || '', age: '' });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      alert(getFirebaseErrorMessage(error));
     } finally {
       setFetching(false);
     }
@@ -79,37 +116,60 @@ export default function MyPage() {
     if (!user) return;
     setSavingProfile(true);
     try {
-      await userService.updateUserProfile(user.uid, profile);
+      let finalAvatarUrl = profile.avatarUrl;
+      if (avatarFile) {
+        finalAvatarUrl = await userService.uploadAvatar(user.uid, avatarFile);
+      }
+      const updatedProfile = { ...profile, avatarUrl: finalAvatarUrl };
+      await userService.updateUserProfile(user.uid, updatedProfile);
+      setProfile(updatedProfile);
       setIsEditingProfile(false);
+      setAvatarFile(null);
+      setAvatarPreview(null);
       alert('プロフィールを保存しました。');
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert('プロフィールの保存に失敗しました。');
+      alert('プロフィールの保存に失敗しました: ' + getFirebaseErrorMessage(error));
     } finally {
       setSavingProfile(false);
     }
   };
 
-  const handleDeleteAccount = async () => {
-    if (!user) return;
-    if (!confirm('本当に退会しますか？この操作は取り消せません。\n保存したすべてのアイデアも削除されます。')) return;
-    
-    try {
-      await userService.deleteUserAccount(user.uid);
-      alert('退会処理が完了しました。ご利用ありがとうございました。');
-      router.push('/');
-    } catch (error: any) {
-      console.error('Delete account error:', error);
-      alert(error.message || '退会処理に失敗しました。');
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      setAvatarFile(file);
+      setAvatarPreview(URL.createObjectURL(file));
     }
+  };
+
+  const handleDeleteAccount = () => {
+    if (!user) return;
+    showConfirm(
+      'アカウントの退会',
+      '本当に退会しますか？この操作は取り消せません。\n保存したすべてのアイデアも削除されます。',
+      async () => {
+        try {
+          await userService.deleteUserAccount(user.uid);
+          alert('退会処理が完了しました。ご利用ありがとうございました。');
+          router.push('/');
+        } catch (error: any) {
+          console.error('Delete account error:', error);
+          alert(getFirebaseErrorMessage(error));
+        }
+      },
+      true,
+      '退会する'
+    );
   };
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
       router.push('/');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Logout error:', error);
+      alert(getFirebaseErrorMessage(error));
     }
   };
 
@@ -124,33 +184,87 @@ export default function MyPage() {
 
   const handleToggleFavorite = async (idea: Idea, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!user) return;
-    try {
-      const isFavorited = (idea.favoritedBy || []).includes(user.uid);
-      const newStatus = await ideaService.toggleFavorite(idea.id, idea.user_id, user.uid);
+    
+    // Auth loading protection
+    if (loading) return;
+
+    if (!user) {
+      // Guest favorite logic
+      const existingStatus = (idea.favoritedBy || []).includes('guest');
+      const expectedNewStatus = !existingStatus;
       
-      const newFavoritedBy = newStatus 
-        ? [...(idea.favoritedBy || []), user.uid] 
-        : (idea.favoritedBy || []).filter(id => id !== user.uid);
+      const newFavoritedBy = expectedNewStatus 
+        ? [...(idea.favoritedBy || []), 'guest'] 
+        : (idea.favoritedBy || []).filter(id => id !== 'guest');
         
       const updatedIdea = { ...idea, favoritedBy: newFavoritedBy };
-      updateIdeaInLists(updatedIdea);
+      ideaService.toggleLocalFavorite(updatedIdea);
 
-      // Add or remove from favoriteIdeas list dynamically
-      if (newStatus) {
-        if (!favoriteIdeas.find(i => i.id === idea.id)) {
-          setFavoriteIdeas(prev => [updatedIdea, ...prev]);
+      updateIdeaInLists(updatedIdea);
+      setFavoriteIdeas(prev => {
+        if (expectedNewStatus) {
+          if (!prev.find(i => i.id === idea.id)) return [updatedIdea, ...prev];
+          return prev.map(i => i.id === idea.id ? updatedIdea : i);
+        } else {
+          return prev.filter(i => i.id !== idea.id);
         }
+      });
+      return;
+    }
+
+    const currentUserId = user.uid;
+    const isFavorited = (idea.favoritedBy || []).includes(currentUserId);
+    const expectedNewStatus = !isFavorited;
+    
+    const newFavoritedBy = expectedNewStatus 
+      ? [...(idea.favoritedBy || []), currentUserId] 
+      : (idea.favoritedBy || []).filter(id => id !== currentUserId);
+      
+    const updatedIdea = { ...idea, favoritedBy: newFavoritedBy };
+    
+    updateIdeaInLists(updatedIdea);
+    setFavoriteIdeas(prev => {
+      if (expectedNewStatus) {
+        if (!prev.find(i => i.id === idea.id)) return [updatedIdea, ...prev];
+        return prev.map(i => i.id === idea.id ? updatedIdea : i);
       } else {
-        setFavoriteIdeas(prev => prev.filter(i => i.id !== idea.id));
+        return prev.filter(i => i.id !== idea.id);
       }
-    } catch (error) {
-      console.error(error);
+    });
+
+    try {
+      const targetUserId = idea.user_id || currentUserId;
+      if (!idea.id || !targetUserId) throw new Error("Missing idea or user ID");
+      await ideaService.toggleFavorite(idea.id, targetUserId, currentUserId);
+    } catch (error: any) {
+      console.error('Toggle favorite failed:', error);
+      
+      if (error.message === "Idea not found") {
+        // Idea was likely deleted by the owner or migration bug
+        alert("このアイデアは見つかりませんでした（既に削除されている可能性があります）。");
+        setMyIdeas(prev => prev.filter(i => i.id !== idea.id));
+        setLikedIdeas(prev => prev.filter(i => i.id !== idea.id));
+        setFavoriteIdeas(prev => prev.filter(i => i.id !== idea.id));
+        if (selectedIdea?.id === idea.id) setSelectedIdea(null);
+        return;
+      }
+      
+      updateIdeaInLists(idea); // revert optimistic update
+      setFavoriteIdeas(prev => {
+        if (isFavorited) {
+          if (!prev.find(i => i.id === idea.id)) return [idea, ...prev];
+          return prev.map(i => i.id === idea.id ? idea : i);
+        } else {
+          return prev.filter(i => i.id !== idea.id);
+        }
+      });
+      alert('お気に入りの更新に失敗しました: ' + getFirebaseErrorMessage(error));
     }
   };
 
   const handleToggleLike = async (idea: Idea, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (loading) return;
     if (!user) return;
     try {
       const isLiked = (idea.likedBy || []).includes(user.uid);
@@ -172,22 +286,39 @@ export default function MyPage() {
       } else {
         setLikedIdeas(prev => prev.filter(i => i.id !== idea.id));
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      alert(getFirebaseErrorMessage(error));
     }
   };
 
   const handleTogglePublicClick = async (idea: Idea) => {
-    if (!user) return;
+    if (!user) {
+      showConfirm(
+        'ログインが必要です',
+        'SNSへの投稿にはログインが必要です。ログイン画面へ移動しますか？',
+        () => router.push('/login'),
+        false,
+        'ログインする'
+      );
+      return;
+    }
     if (idea.isPublic) {
-      if (confirm('非公開にしますか？')) {
-        try {
-          await ideaService.unpublishIdea(idea.id, user.uid);
-          updateIdeaInLists({ ...idea, isPublic: false });
-        } catch (error) {
-          console.error(error);
-        }
-      }
+      showConfirm(
+        '非公開にする',
+        '本当にこのアイデアを非公開にしますか？',
+        async () => {
+          try {
+            await ideaService.unpublishIdea(idea.id, user.uid);
+            updateIdeaInLists({ ...idea, isPublic: false });
+          } catch (error: any) {
+            console.error(error);
+            alert(getFirebaseErrorMessage(error));
+          }
+        },
+        true,
+        '非公開にする'
+      );
     } else {
       setPublishModalIdea(idea);
       setIsPublishModalOpen(true);
@@ -197,27 +328,75 @@ export default function MyPage() {
   const handlePublishConfirm = async (ideaId: string, tags: string[], commentsEnabled: boolean) => {
     if (!user || !publishModalIdea) return;
     try {
-      await ideaService.publishIdea(ideaId, user.uid, tags, commentsEnabled);
-      updateIdeaInLists({ ...publishModalIdea, isPublic: true, tags, commentsEnabled });
+      let finalIdeaId = ideaId;
+
+      // Migrate local idea to Firestore if needed
+      if (ideaId.startsWith('local_')) {
+        const ideaToSave = { ...publishModalIdea, user_id: user.uid, isPublic: true, tags, commentsEnabled };
+        delete (ideaToSave as any).id;
+        delete (ideaToSave as any).isFavorite;
+        
+        const saved = await ideaService.saveIdea(ideaToSave);
+        finalIdeaId = saved.id;
+      } else {
+        await ideaService.publishIdea(finalIdeaId, user.uid, tags, commentsEnabled);
+      }
+
+      const updatedIdea = { ...publishModalIdea, id: finalIdeaId, isPublic: true, tags, commentsEnabled, user_id: user.uid };
+      updateIdeaInLists(updatedIdea);
       setIsPublishModalOpen(false);
-    } catch (error) {
+
+      showConfirm(
+        '公開完了',
+        'アイデアをSNS（タイムライン）に公開しました！',
+        () => router.push('/timeline'),
+        false,
+        'タイムラインを見る'
+      );
+    } catch (error: any) {
       console.error(error);
-      alert('公開に失敗しました');
+      showConfirm(
+        'エラー',
+        '公開に失敗しました: ' + getFirebaseErrorMessage(error),
+        () => {},
+        false,
+        '閉じる'
+      );
     }
   };
 
-  const handleDelete = async (ideaId: string, e?: React.MouseEvent) => {
+  const handleDelete = (ideaId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!user) return;
-    if (confirm('本当に削除しますか？')) {
-      await ideaService.deleteIdea(ideaId, user.uid);
-      setMyIdeas(prev => prev.filter(i => i.id !== ideaId));
-      setFavoriteIdeas(prev => prev.filter(i => i.id !== ideaId));
-      setLikedIdeas(prev => prev.filter(i => i.id !== ideaId));
-      if (selectedIdea?.id === ideaId) {
-        setIsModalOpen(false);
+    
+    const deleteAction = async () => {
+      if (!user) {
+        ideaService.deleteLocalIdea(ideaId);
+        setMyIdeas(prev => prev.filter(i => i.id !== ideaId));
+        if (selectedIdea?.id === ideaId) setIsModalOpen(false);
+        return;
       }
-    }
+
+      try {
+        await ideaService.deleteIdea(ideaId, user.uid);
+        setMyIdeas(prev => prev.filter(i => i.id !== ideaId));
+        setFavoriteIdeas(prev => prev.filter(i => i.id !== ideaId));
+        setLikedIdeas(prev => prev.filter(i => i.id !== ideaId));
+        if (selectedIdea?.id === ideaId) {
+          setIsModalOpen(false);
+        }
+      } catch (error: any) {
+        console.error(error);
+        alert('削除に失敗しました: ' + getFirebaseErrorMessage(error));
+      }
+    };
+
+    showConfirm(
+      'アイデアの削除',
+      '本当にこのアイデアを削除しますか？\nこの操作は取り消せません。',
+      deleteAction,
+      true,
+      '削除する'
+    );
   };
 
   const openModal = (idea: Idea) => {
@@ -242,19 +421,33 @@ export default function MyPage() {
   });
 
   if (loading || fetching) return <div className="text-center p-10">Loading...</div>;
-  if (!user) return null;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
       {/* Profile Section */}
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-8">
-        <h1 className="text-2xl font-bold mb-6 pb-2 border-b">マイページ</h1>
+      {user ? (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 mb-8">
+          <h1 className="text-2xl font-bold mb-6 pb-2 border-b">マイページ</h1>
         
         <div className="mb-6 flex flex-col md:flex-row gap-8">
           <div className="flex-grow">
             <h2 className="text-lg font-semibold mb-4 text-gray-800">プロフィール情報</h2>
             {isEditingProfile ? (
               <div className="space-y-4 max-w-sm">
+                <div className="flex items-center space-x-4 mb-4">
+                  <div className="relative w-20 h-20 rounded-full bg-gray-200 overflow-hidden border-2 border-gray-100 flex-shrink-0 flex items-center justify-center">
+                    {(avatarPreview || profile.avatarUrl) ? (
+                      <img src={avatarPreview || profile.avatarUrl} alt="Avatar" className="object-cover w-full h-full" />
+                    ) : (
+                      <User size={32} className="text-gray-400" />
+                    )}
+                    <label className="absolute inset-0 bg-black bg-opacity-40 flex items-center justify-center cursor-pointer opacity-0 hover:opacity-100 transition-opacity">
+                      <Camera size={20} className="text-white" />
+                      <input type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
+                    </label>
+                  </div>
+                  <div className="text-sm text-gray-500">アイコンをクリックして変更</div>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">ユーザー名</label>
                   <input 
@@ -297,16 +490,25 @@ export default function MyPage() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3">
-                <p className="text-gray-700"><strong>ユーザー名:</strong> {profile.userName || user.displayName || '未設定'}</p>
-                <p className="text-gray-700"><strong>年代:</strong> {profile.age || '未設定'}</p>
-                <p className="text-gray-700"><strong>メールアドレス:</strong> {user.email}</p>
-                <button 
-                  onClick={() => setIsEditingProfile(true)}
-                  className="mt-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium"
-                >
-                  プロフィールを編集する
-                </button>
+              <div className="space-y-3 flex items-start gap-4">
+                <div className="w-16 h-16 rounded-full bg-gray-200 overflow-hidden border border-gray-100 flex-shrink-0 flex items-center justify-center">
+                  {profile.avatarUrl ? (
+                    <img src={profile.avatarUrl} alt="Avatar" className="object-cover w-full h-full" />
+                  ) : (
+                    <User size={24} className="text-gray-400" />
+                  )}
+                </div>
+                <div>
+                  <p className="text-gray-700"><strong>ユーザー名:</strong> {profile.userName || user.displayName || '未設定'}</p>
+                  <p className="text-gray-700"><strong>年代:</strong> {profile.age || '未設定'}</p>
+                  <p className="text-gray-700"><strong>メールアドレス:</strong> {user.email}</p>
+                  <button 
+                    onClick={() => setIsEditingProfile(true)}
+                    className="mt-2 text-indigo-600 hover:text-indigo-800 text-sm font-medium"
+                  >
+                    プロフィールを編集する
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -328,6 +530,20 @@ export default function MyPage() {
           </div>
         </div>
       </div>
+      ) : (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-indigo-100 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">ログインして全機能を利用しよう</h2>
+            <p className="text-gray-600 text-sm mt-1">作成したアイデアをクラウドに保存し、みんなのアイデアに公開したり、お気に入り機能が使えるようになります。</p>
+          </div>
+          <button 
+            onClick={() => router.push('/login')}
+            className="bg-indigo-600 text-white px-6 py-3 rounded-xl hover:bg-indigo-700 transition shadow-md whitespace-nowrap font-medium"
+          >
+            ログイン / 新規登録
+          </button>
+        </div>
+      )}
       
       {/* Tabs and Search */}
       <div className="mb-6">
@@ -390,7 +606,7 @@ export default function MyPage() {
               key={`${activeTab}-${idea.id}`}
               idea={idea}
               onClick={() => openModal(idea)}
-              currentUserId={user.uid}
+              currentUserId={user?.uid}
               onToggleFavorite={handleToggleFavorite}
               onToggleLike={handleToggleLike}
               onDelete={handleDelete}
@@ -404,8 +620,8 @@ export default function MyPage() {
         idea={selectedIdea}
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        currentUserId={user.uid}
-        currentUserName={profile.userName || user.displayName || '名無し'}
+        currentUserId={user?.uid || ''}
+        currentUserName={profile?.userName || user?.displayName || 'ゲスト'}
         onToggleFavorite={(idea) => handleToggleFavorite(idea)}
         onToggleLike={(idea) => handleToggleLike(idea)}
         onTogglePublic={handleTogglePublicClick}
@@ -418,6 +634,16 @@ export default function MyPage() {
         isOpen={isPublishModalOpen}
         onClose={() => setIsPublishModalOpen(false)}
         onPublish={handlePublishConfirm}
+      />
+
+      <ConfirmModal
+        isOpen={confirmConfig.isOpen}
+        title={confirmConfig.title}
+        message={confirmConfig.message}
+        onConfirm={confirmConfig.onConfirm}
+        onCancel={() => setConfirmConfig(prev => ({ ...prev, isOpen: false }))}
+        isDestructive={confirmConfig.isDestructive}
+        confirmText={confirmConfig.confirmText}
       />
     </div>
   );

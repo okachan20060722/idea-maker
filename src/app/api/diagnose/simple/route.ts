@@ -1,21 +1,15 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
+import { generateContentWithRotation } from '@/lib/geminiRotation';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { answers } = body;
+    const { answers, sessionId } = body;
 
     if (!answers || !Array.isArray(answers) || answers.length === 0) {
       return NextResponse.json({ error: '回答データが必要です。' }, { status: 400 });
     }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'Gemini APIキーが設定されていません。' }, { status: 500 });
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
 
     const formattedAnswers = answers.map((a: any) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n');
 
@@ -23,6 +17,8 @@ export async function POST(request: Request) {
 
 回答:
 ${formattedAnswers}
+
+アイデアの『実現可能性（Feasibility）』を客観的に評価し、0〜100点の間でスコアを出してください。また、そのスコアをさらに向上させるために『まず何から始めるべきか』などの現実的なアクションプラン（改善案）も提示してください。さらに、検索用キーワードを3〜5個程度抽出してください。
 
 出力は以下のJSONフォーマットに必ず従ってください。`;
 
@@ -56,15 +52,22 @@ ${formattedAnswers}
             monetization: {
               type: Type.STRING,
               description: "マネタイズ（収益化）の方法"
+            },
+            feasibilityScore: { type: Type.INTEGER, description: "アイデアの現実的な実現可能性（0〜100の数値。パーセント表示用）" },
+            feasibilityActionPlan: { type: Type.STRING, description: "実現性スコアをさらに引き上げ、実際に形にするための具体的で現実的な一歩や改善案" },
+            keywords: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "アイデアの特徴を表す検索用キーワード（3〜5個程度）"
             }
           },
-          required: ["title", "summary", "target", "differentiation", "monetization"],
+          required: ["title", "summary", "target", "differentiation", "monetization", "feasibilityScore", "feasibilityActionPlan", "keywords"],
         }
       },
       required: ["diagnosis", "idea"],
     };
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRotation({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: {

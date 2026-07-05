@@ -9,6 +9,7 @@ import {
 } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
 import { useRouter } from 'next/navigation';
+import { getFirebaseErrorMessage } from '@/lib/firebaseError';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -26,7 +27,7 @@ export default function LoginPage() {
       await signInWithEmailAndPassword(auth, email, password);
       router.push('/');
     } catch (error: any) {
-      setErrorMsg(error.message || 'ログインに失敗しました');
+      setErrorMsg(getFirebaseErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -42,7 +43,7 @@ export default function LoginPage() {
       alert('登録が完了しました。');
       router.push('/');
     } catch (error: any) {
-      setErrorMsg(error.message || '登録に失敗しました');
+      setErrorMsg(getFirebaseErrorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -56,7 +57,7 @@ export default function LoginPage() {
       await signInWithPopup(auth, provider);
       router.push('/');
     } catch (error: any) {
-      setErrorMsg(error.message || 'Googleログインに失敗しました');
+      setErrorMsg(getFirebaseErrorMessage(error));
     } finally {
       setLoading(false);
     }

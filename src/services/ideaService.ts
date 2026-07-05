@@ -40,6 +40,15 @@ export type Idea = {
   commentsEnabled?: boolean;
 };
 
+export type DiagnosisHistory = {
+  id: string;
+  user_id: string;
+  type: 'ai' | 'simple';
+  diagnosisText: string;
+  idea: Omit<Idea, 'id' | 'createdAt' | 'isFavorite'>;
+  createdAt: any;
+};
+
 export interface IdeaComment {
   id: string;
   userId: string;
@@ -66,8 +75,8 @@ export const ideaService = {
     const q = query(ideasRef, orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({
-      id: doc.id,
       ...doc.data(),
+      id: doc.id,
       createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
     })) as Idea[];
   },
@@ -128,8 +137,9 @@ export const ideaService = {
     const q = query(ideasRef, where('favoritedBy', 'array-contains', userId), orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
     const results = snapshot.docs.map(doc => ({
-      id: doc.id,
       ...doc.data(),
+      id: doc.id,
+      user_id: doc.data().user_id || doc.ref.parent?.parent?.id || '',
       createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
     })) as Idea[];
     // Memory sort to avoid index requirements
@@ -141,8 +151,9 @@ export const ideaService = {
     const q = query(ideasRef, where('likedBy', 'array-contains', userId), orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
     const results = snapshot.docs.map(doc => ({
-      id: doc.id,
       ...doc.data(),
+      id: doc.id,
+      user_id: doc.data().user_id || doc.ref.parent?.parent?.id || '',
       createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
     })) as Idea[];
     // Memory sort
@@ -162,8 +173,9 @@ export const ideaService = {
     const q = query(ideasRef, where('isPublic', '==', true));
     const snapshot = await getDocs(q);
     const results = snapshot.docs.map(doc => ({
-      id: doc.id,
       ...doc.data(),
+      id: doc.id,
+      user_id: doc.data().user_id || doc.ref.parent?.parent?.id || '',
       createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
     })) as Idea[];
     // Memory sort to avoid requiring a composite index for isPublic + createdAt
@@ -229,13 +241,13 @@ export const ideaService = {
       createdAt: new Date().toISOString()
     };
     localIdeas.unshift(newIdea); // Add to beginning
-    sessionStorage.setItem('guest_ideas', JSON.stringify(localIdeas));
+    localStorage.setItem('guest_ideas', JSON.stringify(localIdeas));
     return newIdea;
   },
 
   getLocalIdeas: (): Idea[] => {
     if (typeof window === 'undefined') return [];
-    const stored = sessionStorage.getItem('guest_ideas');
+    const stored = localStorage.getItem('guest_ideas');
     if (!stored) return [];
     try {
       return JSON.parse(stored);
@@ -248,6 +260,130 @@ export const ideaService = {
     if (typeof window === 'undefined') return;
     const localIdeas = ideaService.getLocalIdeas();
     const filtered = localIdeas.filter(idea => idea.id !== id);
-    sessionStorage.setItem('guest_ideas', JSON.stringify(filtered));
+    localStorage.setItem('guest_ideas', JSON.stringify(filtered));
+  },
+
+  getLocalFavorites: (): Idea[] => {
+    if (typeof window === 'undefined') return [];
+    const stored = localStorage.getItem('guest_favorites');
+    if (!stored) return [];
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      return [];
+    }
+  },
+
+  toggleLocalFavorite: (idea: Idea): boolean => {
+    if (typeof window === 'undefined') return false;
+    const favorites = ideaService.getLocalFavorites();
+    const existingIndex = favorites.findIndex((i) => i.id === idea.id);
+    
+    if (existingIndex >= 0) {
+      // Remove it
+      favorites.splice(existingIndex, 1);
+      localStorage.setItem('guest_favorites', JSON.stringify(favorites));
+      return false;
+    } else {
+      // Add it
+      favorites.unshift(idea);
+      localStorage.setItem('guest_favorites', JSON.stringify(favorites));
+      return true;
+    }
+  },
+
+  // Diagnosis History Methods
+  saveDiagnosisHistory: async (history: Omit<DiagnosisHistory, 'id' | 'createdAt'>) => {
+    const historyRef = collection(db, 'users', history.user_id, 'diagnosisHistory');
+    const docRef = await addDoc(historyRef, {
+      ...history,
+      createdAt: serverTimestamp(),
+    });
+    return { ...history, id: docRef.id, createdAt: new Date() };
+  },
+
+  getDiagnosisHistory: async (userId: string) => {
+    const historyRef = collection(db, 'users', userId, 'diagnosisHistory');
+    const q = query(historyRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate()?.toISOString() || new Date().toISOString()
+    })) as DiagnosisHistory[];
+  },
+
+  deleteDiagnosisHistory: async (userId: string, historyId: string) => {
+    const historyRef = doc(db, 'users', userId, 'diagnosisHistory', historyId);
+    await deleteDoc(historyRef);
+  },
+
+  saveLocalDiagnosisHistory: (history: Omit<DiagnosisHistory, 'id' | 'createdAt'>) => {
+    if (typeof window === 'undefined') return null;
+    const localHistory = ideaService.getLocalDiagnosisHistory();
+    const newHistory: DiagnosisHistory = {
+      ...history,
+      id: `local_hist_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      createdAt: new Date().toISOString()
+    };
+    localHistory.unshift(newHistory);
+    localStorage.setItem('guest_diagnosis_history', JSON.stringify(localHistory));
+    return newHistory;
+  },
+
+  getLocalDiagnosisHistory: (): DiagnosisHistory[] => {
+    if (typeof window === 'undefined') return [];
+    const stored = localStorage.getItem('guest_diagnosis_history');
+    if (!stored) return [];
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      return [];
+    }
+  },
+
+  deleteLocalDiagnosisHistory: (id: string) => {
+    if (typeof window === 'undefined') return;
+    const localHistory = ideaService.getLocalDiagnosisHistory();
+    const filtered = localHistory.filter(h => h.id !== id);
+    localStorage.setItem('guest_diagnosis_history', JSON.stringify(filtered));
+  },
+
+  migrateGuestData: async (userId: string) => {
+    if (typeof window === 'undefined') return;
+    
+    // Migrate guest ideas
+    const localIdeas = ideaService.getLocalIdeas();
+    if (localIdeas.length > 0) {
+      for (const idea of localIdeas) {
+        const ideaToSave = { ...idea, user_id: userId, isPublic: false };
+        delete (ideaToSave as any).id;
+        delete (ideaToSave as any).isFavorite;
+        await ideaService.saveIdea(ideaToSave);
+      }
+      localStorage.removeItem('guest_ideas');
+    }
+
+    // Migrate guest diagnosis history
+    const localHistory = ideaService.getLocalDiagnosisHistory();
+    if (localHistory.length > 0) {
+      for (const history of localHistory) {
+        const ideaToSave = { ...history.idea, user_id: userId };
+        delete (ideaToSave as any).id;
+        delete (ideaToSave as any).isFavorite;
+
+        const historyToSave = { 
+          ...history, 
+          user_id: userId, 
+          type: history.type, 
+          diagnosisText: history.diagnosisText, 
+          idea: ideaToSave 
+        };
+        delete (historyToSave as any).id;
+
+        await ideaService.saveDiagnosisHistory(historyToSave);
+      }
+      localStorage.removeItem('guest_diagnosis_history');
+    }
   }
 };

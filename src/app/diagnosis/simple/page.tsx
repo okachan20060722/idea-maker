@@ -7,6 +7,8 @@ import { IdeaResult } from '@/types';
 import ResultCard from '@/components/ResultCard';
 import { useAuth } from '@/hooks/useAuth';
 import { ideaService } from '@/services/ideaService';
+import { getFirebaseErrorMessage } from '@/lib/firebaseError';
+import { fetchWithRetry } from '@/lib/fetchWithRetry';
 
 const questions = [
   {
@@ -66,13 +68,18 @@ const questions = [
 export default function SimpleDiagnosis() {
   const [currentStep, setCurrentStep] = useState(0);
   const [answers, setAnswers] = useState<string[]>([]);
+  const [sessionId, setSessionId] = useState('');
+
+  React.useEffect(() => {
+    setSessionId(Math.random().toString(36).substring(2, 15) + Date.now().toString(36));
+  }, []);
   const [isDiagnosing, setIsDiagnosing] = useState(false);
   const [result, setResult] = useState<{diagnosis: string, idea: IdeaResult} | null>(null);
   const { user } = useAuth();
   
   const [savedIdeaId, setSavedIdeaId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isFavorited, setIsFavorited] = useState(false);
+  const resultRef = React.useRef<HTMLDivElement>(null);
 
   const handleSelect = (option: string) => {
     const newAnswers = [...answers];
@@ -89,7 +96,6 @@ export default function SimpleDiagnosis() {
   const submitDiagnosis = async (finalAnswers: string[]) => {
     setIsDiagnosing(true);
     setSavedIdeaId(null);
-    setIsFavorited(false);
     
     try {
       const payload = questions.map((q, i) => ({
@@ -97,12 +103,12 @@ export default function SimpleDiagnosis() {
         answer: finalAnswers[i]
       }));
 
-      const res = await fetch('/api/diagnose/simple', {
+      const res = await fetchWithRetry('/api/diagnose/simple', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ answers: payload }),
+        body: JSON.stringify({ answers: payload, sessionId }),
       });
 
       if (!res.ok) {
@@ -117,6 +123,8 @@ export default function SimpleDiagnosis() {
         differentiation: data.idea.differentiation,
         monetization: data.idea.monetization,
         keywords: data.idea.keywords || [],
+        feasibilityScore: data.idea.feasibilityScore,
+        feasibilityActionPlan: data.idea.feasibilityActionPlan,
       };
       
       setResult({
@@ -124,43 +132,54 @@ export default function SimpleDiagnosis() {
         idea: mappedIdea
       });
 
-      // Auto save
+      setTimeout(() => {
+        resultRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+
+      // Auto save to history
       if (user) {
-        setIsSaving(true);
         try {
-          const saved = await ideaService.saveIdea({
+          await ideaService.saveDiagnosisHistory({
             user_id: user.uid,
+            type: 'simple',
+            diagnosisText: data.diagnosis,
+            idea: {
+              user_id: user.uid,
+              title: mappedIdea.name,
+              summary: mappedIdea.summary,
+              target: mappedIdea.targetUser,
+              differentiation: mappedIdea.differentiation,
+              monetization: mappedIdea.monetization,
+              keywords: mappedIdea.keywords,
+              feasibilityScore: mappedIdea.feasibilityScore,
+              feasibilityActionPlan: mappedIdea.feasibilityActionPlan,
+            }
+          });
+        } catch (error: any) {
+          console.error("Auto save history failed", error);
+        }
+      } else {
+        ideaService.saveLocalDiagnosisHistory({
+          user_id: 'guest',
+          type: 'simple',
+          diagnosisText: data.diagnosis,
+          idea: {
+            user_id: 'guest',
             title: mappedIdea.name,
             summary: mappedIdea.summary,
             target: mappedIdea.targetUser,
             differentiation: mappedIdea.differentiation,
             monetization: mappedIdea.monetization,
             keywords: mappedIdea.keywords,
-            isPublic: false,
-          });
-          setSavedIdeaId(saved.id);
-        } catch (error) {
-          console.error("Auto save failed", error);
-        } finally {
-          setIsSaving(false);
-        }
-      } else {
-        const saved = ideaService.saveLocalIdea({
-          user_id: 'guest',
-          title: mappedIdea.name,
-          summary: mappedIdea.summary,
-          target: mappedIdea.targetUser,
-          differentiation: mappedIdea.differentiation,
-          monetization: mappedIdea.monetization,
-          keywords: mappedIdea.keywords,
-          isPublic: false,
+            feasibilityScore: mappedIdea.feasibilityScore,
+            feasibilityActionPlan: mappedIdea.feasibilityActionPlan,
+          }
         });
-        if (saved) setSavedIdeaId(saved.id);
       }
       
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert('エラーが発生しました。もう一度お試しください。');
+      alert('エラーが発生しました: ' + getFirebaseErrorMessage(error));
       setCurrentStep(0);
       setAnswers([]);
     } finally {
@@ -168,56 +187,111 @@ export default function SimpleDiagnosis() {
     }
   };
 
-  const handleFavorite = async () => {
-    if (!user || !savedIdeaId) return;
-    try {
-      const favoriteState = await ideaService.toggleFavorite(savedIdeaId, user.uid, user.uid);
-      setIsFavorited(favoriteState);
-    } catch (error: any) {
-      console.error(error);
-      alert('お気に入りの更新に失敗しました: ' + error.message);
+  const handleToggleSave = async () => {
+    if (!result) return;
+    if (savedIdeaId) {
+      // Unsave
+      setIsSaving(true);
+      try {
+        if (user) {
+          await ideaService.deleteIdea(savedIdeaId, user.uid);
+        } else {
+          ideaService.deleteLocalIdea(savedIdeaId);
+        }
+        setSavedIdeaId('');
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setIsSaving(false);
+      }
+    } else {
+      // Save
+      setIsSaving(true);
+      try {
+        if (user) {
+          const saved = await ideaService.saveIdea({
+            user_id: user.uid,
+            title: result.idea.name,
+            summary: result.idea.summary,
+            target: result.idea.targetUser,
+            differentiation: result.idea.differentiation,
+            monetization: result.idea.monetization,
+            keywords: result.idea.keywords,
+            feasibilityScore: result.idea.feasibilityScore,
+            feasibilityActionPlan: result.idea.feasibilityActionPlan,
+            isPublic: false,
+          });
+          setSavedIdeaId(saved.id);
+        } else {
+          const saved = ideaService.saveLocalIdea({
+            user_id: 'guest',
+            title: result.idea.name,
+            summary: result.idea.summary,
+            target: result.idea.targetUser,
+            differentiation: result.idea.differentiation,
+            monetization: result.idea.monetization,
+            keywords: result.idea.keywords,
+            feasibilityScore: result.idea.feasibilityScore,
+            feasibilityActionPlan: result.idea.feasibilityActionPlan,
+            isPublic: false,
+          });
+          if (saved) setSavedIdeaId(saved.id);
+        }
+      } catch (error: any) {
+        console.error(error);
+        alert('保存に失敗しました: ' + getFirebaseErrorMessage(error));
+      } finally {
+        setIsSaving(false);
+      }
     }
   };
 
   if (result) {
     return (
-      <main className="max-w-4xl mx-auto px-4 py-8">
+      <main className="max-w-4xl mx-auto px-4 py-8" ref={resultRef}>
         <Link href="/diagnosis" className="inline-flex items-center text-teal-600 hover:text-teal-700 mb-6 font-medium">
           <ArrowLeft size={16} className="mr-1" />
           診断メニューへ戻る
         </Link>
         
-        <div className="bg-gradient-to-r from-teal-500 to-emerald-500 rounded-2xl p-8 text-white mb-8 shadow-lg">
-          <h1 className="text-3xl font-bold mb-4 flex items-center">
-            <Sparkles className="mr-3" />
-            診断結果
+        <div className="bg-gradient-to-r from-teal-500 to-emerald-500 rounded-2xl p-8 text-white mb-8 shadow-lg text-center">
+          <h1 className="text-3xl md:text-4xl font-extrabold mb-6 flex justify-center items-center flex-wrap gap-2">
+            <Sparkles className="mr-2" size={32} />
+            {result.idea.keywords && result.idea.keywords.length > 0 ? result.idea.keywords.join(' × ') : '診断結果'}
           </h1>
-          <p className="text-lg leading-relaxed">{result.diagnosis}</p>
+          <div className="bg-white/10 p-6 rounded-xl text-left backdrop-blur-sm">
+            <h3 className="text-sm font-bold text-teal-100 mb-2 uppercase tracking-wider">AIからの分析コメント</h3>
+            <p className="text-lg leading-relaxed text-white">{result.diagnosis}</p>
+          </div>
         </div>
 
         <h2 className="text-2xl font-bold text-gray-900 mb-6">あなたへのおすすめアイデア</h2>
         <ResultCard 
           result={result.idea} 
-          onFavorite={handleFavorite}
+          onSave={handleToggleSave}
+          onToggleSave={handleToggleSave}
           isSaving={isSaving}
           isSaved={!!savedIdeaId}
-          isFavorited={isFavorited}
           isAuthenticated={!!user}
         />
         
-        <div className="mt-8 text-center flex justify-center space-x-4">
+        <div className="mt-8 text-center flex flex-col sm:flex-row justify-center gap-4">
+          <Link href="/diagnosis" className="px-6 py-3 bg-white text-gray-700 font-medium rounded-full shadow border border-gray-200 hover:bg-gray-50 transition inline-flex items-center justify-center">
+            診断メニューへ
+          </Link>
           <button 
             onClick={() => {
               setResult(null);
               setCurrentStep(0);
               setAnswers([]);
+              setSessionId(Math.random().toString(36).substring(2, 15) + Date.now().toString(36));
             }}
-            className="px-6 py-3 bg-white text-gray-700 font-medium rounded-full shadow border border-gray-200 hover:bg-gray-50 transition"
+            className="px-6 py-3 bg-teal-50 text-teal-700 font-medium rounded-full shadow border border-teal-100 hover:bg-teal-100 transition inline-flex items-center justify-center"
           >
             もう一度診断する
           </button>
-          <Link href="/ideas" className="px-6 py-3 bg-teal-600 text-white font-medium rounded-full shadow hover:bg-teal-700 transition">
-            保存されたアイデアを見る
+          <Link href="/diagnosis/history" className="px-6 py-3 bg-teal-600 text-white font-medium rounded-full shadow hover:bg-teal-700 transition inline-flex items-center justify-center">
+            診断履歴
           </Link>
         </div>
       </main>
@@ -227,12 +301,13 @@ export default function SimpleDiagnosis() {
   if (isDiagnosing) {
     return (
       <main className="min-h-[60vh] flex flex-col items-center justify-center p-8 text-center">
-        <div className="w-20 h-20 mb-8 relative">
-          <div className="absolute inset-0 rounded-full border-4 border-teal-100"></div>
-          <div className="absolute inset-0 rounded-full border-4 border-teal-500 border-t-transparent animate-spin"></div>
+        <div className="flex space-x-3 mb-8">
+          <div className="w-5 h-5 bg-teal-400 rounded-full animate-bounce"></div>
+          <div className="w-5 h-5 bg-teal-500 rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
+          <div className="w-5 h-5 bg-teal-600 rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
         </div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">診断中...</h2>
-        <p className="text-gray-500">あなたの回答から最適な方向性を分析しています</p>
+        <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-4 animate-pulse">診断結果を作成中...</h2>
+        <p className="text-gray-500">これまでの回答をもとに、実現性の高いプランを構築しています</p>
       </main>
     );
   }
