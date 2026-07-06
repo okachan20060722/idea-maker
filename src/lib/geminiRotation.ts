@@ -7,7 +7,7 @@ export function getGeminiApiKeys(): string[] {
     process.env.GEMINI_API_KEY_3 || process.env.NEXT_PUBLIC_GEMINI_API_KEY_3,
     process.env.GEMINI_API_KEY_4 || process.env.NEXT_PUBLIC_GEMINI_API_KEY_4,
     process.env.GEMINI_API_KEY_5 || process.env.NEXT_PUBLIC_GEMINI_API_KEY_5,
-    process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY, // Fallback
   ].filter(Boolean) as string[];
 
   return Array.from(new Set(keys)); // Remove duplicates
